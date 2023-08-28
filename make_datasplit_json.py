@@ -18,8 +18,18 @@ class NpEncoder(json.JSONEncoder):
 
 
 class SplitJson:
-    def __init__(self, excel_path: str, output_folder: str, endpoint_name: str = 'Need resection?', sheet_name: str = None,
-                    json_path: str = None, seed: str = 42, split: float = 0.4, cross_val: int = 1, multiple_hotspots=None):
+    def __init__(
+        self,
+        excel_path: str,
+        output_folder: str,
+        endpoint_name: str = "Need resection?",
+        sheet_name: str = None,
+        json_path: str = None,
+        seed: str = 42,
+        split: float = 0.4,
+        cross_val: int = 1,
+        multiple_hotspots=None,
+    ):
         np.random.seed(seed)
         self.output_folder = output_folder
         self.endpoint_name = endpoint_name
@@ -34,7 +44,6 @@ class SplitJson:
 
         self.save_endpoint_jsons()
 
-
     @property
     def endpoints_df(self):
         return self._endpoints
@@ -42,13 +51,13 @@ class SplitJson:
     @endpoints_df.setter
     def endpoints_df(self, path_sheet):
         excel_path, sheet_name = path_sheet
-        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine='openpyxl')
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
 
-        df.drop(df[df.Excluded==True].index, inplace=True)
-        df.drop(df[df['Exclude for BTS'] == 'x'].index, inplace=True)
-        df.drop(df[df['CD8 ID'] == 'na'].index, inplace=True)
+        df.drop(df[df.Excluded == True].index, inplace=True)
+        df.drop(df[df["Exclude for BTS"] == "x"].index, inplace=True)
+        df.drop(df[df["CD8 ID"] == "na"].index, inplace=True)
 
-        df.set_index('CD8 filename', inplace=True)
+        df.set_index("CD8 filename", inplace=True)
         self._endpoints = df
 
     @property
@@ -61,11 +70,15 @@ class SplitJson:
         else:
             endpoints_dict = {}
         for filename in self.endpoints_df.index:
-            patient_id = self.endpoints_df.at[filename, 'CD8 ID']
-            patient_nr = self.endpoints_df.at[filename, 'Patient-Nr']
-            d = {self.endpoint_name: int(self.endpoints_df.at[filename, self.endpoint_name]),
-                 'CD8 folder': self.endpoints_df.at[filename, 'CD8 folder'],
-                 'patient-nr': patient_nr}
+            patient_id = self.endpoints_df.at[filename, "CD8 ID"]
+            patient_nr = self.endpoints_df.at[filename, "Patient-Nr"]
+            d = {
+                self.endpoint_name: int(
+                    self.endpoints_df.at[filename, self.endpoint_name]
+                ),
+                "CD8 folder": self.endpoints_df.at[filename, "CD8 folder"],
+                "patient-nr": patient_nr,
+            }
             if patient_id in endpoints_dict:
                 endpoints_dict[str(patient_id)].update({filename: d})
             else:
@@ -76,7 +89,11 @@ class SplitJson:
         else:
             multiple_hs_dict = {}
             for file_id, fileinfo_d in endpoints_dict.items():
-                multiple_hs_dict[file_id] = {f'{fname}_hotspot{i}': info for fname, info in fileinfo_d.items() for i in range(self.multiple_hotspots)}
+                multiple_hs_dict[file_id] = {
+                    f"{fname}_hotspot{i}": info
+                    for fname, info in fileinfo_d.items()
+                    for i in range(self.multiple_hotspots)
+                }
             return multiple_hs_dict
 
     @property
@@ -89,12 +106,14 @@ class SplitJson:
         # get the dataset split json
         # get the data set splits, equal distribution per class and separated by patient
         # split is either per patient or we only have one entry per patient
-        pid = np.array(self.endpoints_df['Patient-Nr'])
+        pid = np.array(self.endpoints_df["Patient-Nr"])
         X = np.array(self.endpoints_df.index)
         y = np.array(self.endpoints_df[self.endpoint_name], dtype=int)
         split_dict = {int(i): {} for i in range(self.cross_val)}
 
-        for i, (train_index, test_index) in enumerate(self._get_split_generator(pid, X, y)):
+        for i, (train_index, test_index) in enumerate(
+            self._get_split_generator(pid, X, y)
+        ):
             X_train, X_test = X[train_index], X[test_index]
             y_train, y_test = y[train_index], y[test_index]
 
@@ -103,16 +122,22 @@ class SplitJson:
                 if self.multiple_hotspots is None:
                     filename_per_class[c].append(filename)
                 else:
-                    filename_per_class[c] = filename_per_class[c] + [f'{filename}_hotspot{i}' for i in range(self.multiple_hotspots)]
+                    filename_per_class[c] = filename_per_class[c] + [
+                        f"{filename}_hotspot{i}" for i in range(self.multiple_hotspots)
+                    ]
             split_dict[i] = filename_per_class
         return split_dict
 
     def _get_split_generator(self, pid, X, y):
         if np.unique(pid).size == len(pid):
-            skf = StratifiedKFold(n_splits=self.cross_val, random_state=self.seed, shuffle=True)
+            skf = StratifiedKFold(
+                n_splits=self.cross_val, random_state=self.seed, shuffle=True
+            )
             split_generator = skf.split(X, y)
         else:
-            gkf = StratifiedGroupKFold(n_splits=self.cross_val, random_state=self.seed, shuffle=True)
+            gkf = StratifiedGroupKFold(
+                n_splits=self.cross_val, random_state=self.seed, shuffle=True
+            )
             split_generator = gkf.split(X, y, groups=pid)
         return split_generator
 
@@ -121,18 +146,25 @@ class SplitJson:
         if self.multiple_hotspots is None:
             json_filename = self.input_filename
         else:
-            json_filename = f'{self.input_filename}-hotspot-top{self.multiple_hotspots}'
-        with open(os.path.join(self.output_folder, f'{json_filename}-all.json'), 'w') as fp:
+            json_filename = f"{self.input_filename}-hotspot-top{self.multiple_hotspots}"
+        with open(
+            os.path.join(self.output_folder, f"{json_filename}-all.json"), "w"
+        ) as fp:
             json.dump(self.endpoints_dict, fp, indent=4, cls=NpEncoder)
 
-        with open(os.path.join(self.output_folder, f'{json_filename}-cv{self.cross_val}.json'), 'w') as fp:
+        with open(
+            os.path.join(
+                self.output_folder, f"{json_filename}-cv{self.cross_val}.json"
+            ),
+            "w",
+        ) as fp:
             if self.cross_val > 1:
                 json.dump(self.split_dict_cv, fp, indent=4, cls=NpEncoder)
             else:
                 json.dump(self.split_dict, fp, indent=4, cls=NpEncoder)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     """
     INPUT:
     command line arguments:
@@ -144,7 +176,7 @@ if __name__ == '__main__':
     --cross-val: (option) how many cross validation splits should be made (default is 1)
     --seed: (option) set a seed (default is 42)
     --multiple_hotspots: (optional) set number, if multiple hotspots are present per slide
-    
+
     Excel is expected to have the following columns:
     - 'CD8 filename': name of the slide file (e.g. patient1_I_AE1_AE3_CD8)
     - 'CD8 folder: folder where the slide is saved
@@ -154,7 +186,7 @@ if __name__ == '__main__':
         'Need resection?'
            0 : No (0 in TNM stage / follow up (>= 2 years), no recurrence)
            1 : True (1 in TNM stage / follow up (>= 2 years) with recurrence)
-           
+
     OUTPUT:
     json file with all files with structure
         Filename-ID:
@@ -162,7 +194,7 @@ if __name__ == '__main__':
                 folder: CD8 Folder
                 patient-nr: Patient-Nr
                 endpoint: endpoint value
-    
+
     json file dataset split with structure
         train:
             endpoint value: [Filename-ID, ...]
@@ -173,8 +205,8 @@ if __name__ == '__main__':
         test:
             endpoint value: [Filename-ID, ...]
             ...
-            
-    or if with cross validation            
+
+    or if with cross validation
         0:
             endpoint value: [Filename-ID, ...]
             ...
@@ -183,6 +215,5 @@ if __name__ == '__main__':
             ...
         ...
     """
-    #TODO: add asserts to make sure no data is lost
+    # TODO: add asserts to make sure no data is lost
     fire.Fire(SplitJson)
-

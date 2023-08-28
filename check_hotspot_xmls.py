@@ -33,25 +33,34 @@ def check_xml(file_path):
         doc = xmltodict.parse(fd.read())
 
     if len(doc) == 0:
-        print(f'File {file_path} is empty (skipped)!')
+        print(f"File {file_path} is empty (skipped)!")
         return
 
     # check and if necessary correct the structure
     if doc["ASAP_Annotations"]["Annotations"]["Annotation"]["@Name"] != "Annotation 0":
         doc["ASAP_Annotations"]["Annotations"]["Annotation"]["@Name"] = "Annotation 0"
 
-    if doc["ASAP_Annotations"]["Annotations"]["Annotation"]["@PartOfGroup"] != "hotspot":
+    if (
+        doc["ASAP_Annotations"]["Annotations"]["Annotation"]["@PartOfGroup"]
+        != "hotspot"
+    ):
         doc["ASAP_Annotations"]["Annotations"]["Annotation"]["@PartOfGroup"] = "hotspot"
 
     if not doc["ASAP_Annotations"]["AnnotationGroups"]:
-        doc["ASAP_Annotations"]["AnnotationGroups"] = {"Group": {"@Name": "hotspot", "@PartOfGroup": "None",
-                                                                 "@Color": "#64FE2E", "@Attributes": None}}
+        doc["ASAP_Annotations"]["AnnotationGroups"] = {
+            "Group": {
+                "@Name": "hotspot",
+                "@PartOfGroup": "None",
+                "@Color": "#64FE2E",
+                "@Attributes": None,
+            }
+        }
     xml = xmltodict.unparse(doc, pretty=True)
     return xml
 
 
 def parse_matched_files_excel(matched_files_excel):
-    df = pd.read_excel(matched_files_excel, sheet_name='Masterfile', engine='openpyxl')
+    df = pd.read_excel(matched_files_excel, sheet_name="Masterfile", engine="openpyxl")
     # remove two empty top lines and set third line to header
     df.columns = df.iloc[2]
     df = df.iloc[3:]
@@ -59,42 +68,57 @@ def parse_matched_files_excel(matched_files_excel):
     df = df.drop(df[~df["Need resection?"].isin([0, 1])].index)
     # drop all rows that do not contain a file name
     # TODO: make this neater
-    df = df[df['Hotspot filename'].notna()]
-    df = df[df['Algo coordinates text file ID'].notna()]
-    df = df.drop(df[df['Hotspot filename'].isin(["tbd", "na"])].index)
-    df = df.drop(df[df['Algo coordinates text file ID'].isin(["tbd", "na"])].index)
+    df = df[df["Hotspot filename"].notna()]
+    df = df[df["Algo coordinates text file ID"].notna()]
+    df = df.drop(df[df["Hotspot filename"].isin(["tbd", "na"])].index)
+    df = df.drop(df[df["Algo coordinates text file ID"].isin(["tbd", "na"])].index)
     # drop all the other columns
-    files_to_process = df[['Hotspot filename', 'Algo coordinates text file ID']]
+    files_to_process = df[["Hotspot filename", "Algo coordinates text file ID"]]
     return list(files_to_process.itertuples(index=False, name=None))
 
 
-def check_hotspots(input_path: str, output_path: str, overwrite: bool = False, matched_files_excel: str = None):
+def check_hotspots(
+    input_path: str,
+    output_path: str,
+    overwrite: bool = False,
+    matched_files_excel: str = None,
+):
     if not os.path.isdir(output_path):
         os.mkdir(output_path)
 
     if os.path.isdir(input_path):
-        file_list = [(i, os.path.basename(i).split('.xml')[0]) for i in glob.glob(os.path.join(input_path, "*.xml"))]
+        file_list = [
+            (i, os.path.basename(i).split(".xml")[0])
+            for i in glob.glob(os.path.join(input_path, "*.xml"))
+        ]
     else:
-        file_list = [(input_path, os.path.basename(input_path).split('.')[0])]
+        file_list = [(input_path, os.path.basename(input_path).split(".")[0])]
 
     if matched_files_excel:
-        file_list = [(os.path.join(input_path, hotspot_name), outfile_name) for hotspot_name, outfile_name in parse_matched_files_excel(matched_files_excel)]
+        file_list = [
+            (os.path.join(input_path, hotspot_name), outfile_name)
+            for hotspot_name, outfile_name in parse_matched_files_excel(
+                matched_files_excel
+            )
+        ]
 
     for hotspot_file_path, outfile_name in file_list:
         try:
             filename = os.path.basename(hotspot_file_path)
             if not overwrite and os.path.isfile(os.path.join(output_path, filename)):
-                print(f'File {filename} already exists (skipping file).')
+                print(f"File {filename} already exists (skipping file).")
             else:
                 xml = check_xml(hotspot_file_path)
-                with open(os.path.join(output_path, f"{outfile_name}.xml"), "w") as text_file:
+                with open(
+                    os.path.join(output_path, f"{outfile_name}.xml"), "w"
+                ) as text_file:
                     text_file.write(xml)
 
         except FileNotFoundError:
-            print(f'File {hotspot_file_path} not found (skipping file).')
+            print(f"File {hotspot_file_path} not found (skipping file).")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     """
     INPUT:
     command line arguments:
@@ -104,4 +128,3 @@ if __name__ == '__main__':
     --matched-files-excel: excel file which matches up the hotspot names with the text file id
     """
     fire.Fire(check_hotspots)
-
