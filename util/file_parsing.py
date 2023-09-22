@@ -16,7 +16,7 @@ def parse_xml(file_path) -> dict:
                 coords = tuple(anno.coordinates)
             else:
                 raise NotImplementedError
-        coords_per_label[label] = coords
+            coords_per_label[label].append(coords)
     return coords_per_label
 
     # tree = ET.parse(file_path)
