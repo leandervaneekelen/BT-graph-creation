@@ -13,7 +13,7 @@ from collections import defaultdict
 from scipy.spatial import distance, Delaunay
 from sklearn.neighbors import NearestNeighbors
 
-from util.file_parsing import parse_xml
+from utils import parse_xml, make_closed_loop
 
 
 class EdgeConfig:
@@ -205,8 +205,8 @@ class Graph:
             ]
         )
         assert min(coord) >= 0
-        # if self.spacing:
-        #     coord *= self.spacing
+        if self.spacing:
+            coord *= self.spacing
         return coord
 
     def _is_within_roi(self, coordinates) -> bool:
@@ -551,10 +551,11 @@ class Graph:
         }
         graph_gxl = ET.SubElement(xml_tree, "graph", graph_attrib)
 
-        # add roo coordinates to gxl
+        # add roi coordinates to gxl
         roi_gxl = ET.SubElement(xml_tree, "roi-coordinates")
-        coor_attrib = {"Order": "0", "X": str(self.roi[0]), "Y": str(self.roi[1])}
-        xml_coordinate = ET.SubElement(roi_gxl, "Coordinate", attrib=coor_attrib)
+        for i, coord in enumerate(make_closed_loop(*self.roi)):
+            coor_attrib = {"Order": str(i), "X": str(coord[0]), "Y": str(coord[1])}
+            _ = ET.SubElement(roi_gxl, "Coordinate", attrib=coor_attrib)
 
         # add the nodes
         for node_id, node_attrib in self.node_dict.items():
