@@ -8,6 +8,8 @@ from lxml import etree as ET
 import re
 import json
 
+from collections import defaultdict
+
 from scipy.spatial import distance, Delaunay
 from sklearn.neighbors import NearestNeighbors
 
@@ -113,6 +115,9 @@ class EdgeConfig:
         return "-".join([f"{k}_{v}" for k, v in d.items()])
 
 
+DEFAULT_SPACING = 0.242797397769517
+
+
 class Graph:
     """
     Creates a graph object from a list of text files that all need to have the same ID
@@ -120,6 +125,8 @@ class Graph:
     file_id: slide_name
     file_path: path to the files (without the ending, e.g. folder/slide_name_output)
     spacing: spacing from ASAP (list, e.g [0.24, 0.24])
+    roi: optional (x1,y1,x2,x2) location describing the location of a region of interest.
+         Only nodes within the ROI will be used to construct the graph.
     edge_config: EdgeConfig object
     """
 
@@ -127,7 +134,8 @@ class Graph:
         self,
         file_id: str,
         file_path: str,
-        spacing: float = 0.242797397769517,
+        spacing: tuple = (DEFAULT_SPACING, DEFAULT_SPACING),
+        roi: tuple = None,
         edge_config: EdgeConfig = None,
         csv_path: str = None,
     ) -> None:
@@ -135,23 +143,12 @@ class Graph:
         self.file_path = file_path
         self.file_id = file_id
         self.spacing = spacing
+        self.roi = roi
         self.node_feature_csv = csv_path
-
         self.edge_feature_names = []  # will get added during self.add_edges()
 
-        # read the xml file
         self.xml_data = parse_xml(self.file_path)
-
-        # get the node dict splits
-        self.lymph_nodes = self.get_group_node_dict(
-            "lymphocytes",
-        )
-        self.tb_nodes = self.get_group_node_dict(
-            "tumorbuds", offset=len(self.lymph_nodes.keys())
-        )
         self.node_dict = self.get_node_dict()
-        self.xy_tb_nodes = {k: (v["x"], v["y"]) for k, v in self.tb_nodes.items()}
-        self.xy_lymph_nodes = {k: (v["x"], v["y"]) for k, v in self.lymph_nodes.items()}
 
         # set up the edges
         self.edge_config = edge_config.edge_definitions
@@ -181,53 +178,81 @@ class Graph:
         }
 
     @property
-    def hotspot_coordinates(self) -> list:
-        # get the hotspot coordinates
-        return np.array(self.xml_data["hotspot"][0])
+    def node_dict_per_label(self, label) -> dict:
+        """
+        Return the node_dict sorted by label.
+        """
+        node_dict_per_label = defaultdict(dict)
+        for node_id, node_attrib in self.node_dict.items():
+            label = node_attrib["type"]
+            node_dict_per_label[label][node_id] = node_attrib
+        return node_dict_per_label
 
     # *********** setting up the nodes ***********
-    def get_group_node_dict(self, group, offset=0) -> dict:
-        """
-        returns a dict with all the nodes for the given group
-        """
-        # get all the nodes
-        node_name = group[:-1]
-        lines = [self._convert_coord(c) for c in self.xml_data[group]]
-        node_d = {
-            i + offset: {"type": node_name, "x": line[0], "y": line[1]}
-            for i, line in enumerate(lines)
-        }
-        return node_d
 
-    def _convert_coord(self, coordinates):
+    def _center_coordinates(self, coordinates):
+        """
+        Change the origin of the coordinates from the top left of the WSI
+        to the top left of the ROI.
+        """
+
         assert len(coordinates) == 2
-        # adjust x and y to make relative to the hotspot coordinates.
+        x1, y1, _, _ = self.roi
         coord = np.array(
             [
-                coordinates[0] - min(self.hotspot_coordinates[:, 0]),
-                coordinates[1] - min(self.hotspot_coordinates[:, 1]),
+                coordinates[0] - x1,
+                coordinates[1] - y1,
             ]
         )
         assert min(coord) >= 0
-        if self.spacing:
-            coord *= self.spacing
+        # if self.spacing:
+        #     coord *= self.spacing
         return coord
 
+    def _is_within_roi(self, coordinates) -> bool:
+        assert len(coordinates) == 2
+        x1, y1, x2, y2 = self.roi
+        x, y = coordinates
+        return (x1 <= x <= x2) and (y1 <= y <= y2)
+
     def get_node_dict(self):
-        # add the node features from the csv file, if present
-        node_dict = {**self.lymph_nodes, **self.tb_nodes}
-        if self.node_feature_csv is not None:
-            print(self.file_id)
-            if len(self.node_feature_csv) == 0:
-                print(
-                    f"No node features present in csv file for {self.file_id}. Skipping file."
-                )
-                return {}
-            else:
-                node_dict = {
-                    node_id: {**features, **self.node_feature_csv[node_id]}
-                    for node_id, features in node_dict.items()
+        node_dict = defaultdict(dict)
+        offset = 0
+
+        # Populate nodes
+        for label, coords in self.xml_data.items():
+            # Filter points outside of roi
+            if self.roi:
+                coords = [
+                    self._center_coordinates(c)
+                    for c in coords
+                    if self._is_within_roi(c)
+                ]
+
+            # Add x,y,c
+            for i, coords_ in enumerate(coords):
+                node_dict[i + offset] = {
+                    "type": label,
+                    "x": coords_[0],
+                    "y": coords_[1],
                 }
+
+            # Add optional features from csv file (if present)
+            # TODO: how do I know the node_id a priori if this is only defined in situ above?
+            if self.node_feature_csv is not None:
+                print(self.file_id)
+                if len(self.node_feature_csv) == 0:
+                    print(
+                        f"No node features present in csv file for {self.file_id}. Skipping file."
+                    )
+                    return {}
+                else:
+                    node_dict = {
+                        node_id: {**features, **self.node_feature_csv[node_id]}
+                        for node_id, features in node_dict.items()
+                    }
+            offset += len(coords)
+
         return node_dict
 
     # *********** adding edges ***********
@@ -318,7 +343,7 @@ class Graph:
         # fully connect lymphocytes that are connected to the same bud
         tb_ids_sub_graphs = {n: [] for n in self.xy_tb_nodes.keys()}
         sub_graphs = [(int(i) for i in e.split("_")) for e in self.edge_dict.keys()]
-        for (e_from, e_to) in sub_graphs:
+        for e_from, e_to in sub_graphs:
             if e_from in tb_ids_sub_graphs.keys():
                 tb_ids_sub_graphs[e_from].append(e_to)
             elif e_to in tb_ids_sub_graphs.keys():
@@ -526,13 +551,10 @@ class Graph:
         }
         graph_gxl = ET.SubElement(xml_tree, "graph", graph_attrib)
 
-        # add hot-spot coordinates to gxl
-        hotspot_gxl = ET.SubElement(xml_tree, "hotspot-coordinates")
-        for j, tup in enumerate(self.hotspot_coordinates):
-            coor_attrib = {"Order": str(j), "X": str(tup[0]), "Y": str(tup[1])}
-            xml_coordinate = ET.SubElement(
-                hotspot_gxl, "Coordinate", attrib=coor_attrib
-            )
+        # add roo coordinates to gxl
+        roi_gxl = ET.SubElement(xml_tree, "roi-coordinates")
+        coor_attrib = {"Order": "0", "X": str(self.roi[0]), "Y": str(self.roi[1])}
+        xml_coordinate = ET.SubElement(roi_gxl, "Coordinate", attrib=coor_attrib)
 
         # add the nodes
         for node_id, node_attrib in self.node_dict.items():
