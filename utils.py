@@ -25,3 +25,11 @@ def make_closed_loop(x1, y1, x2, y2):
     describing the polygon.
     """
     return np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]])
+
+
+def xywh2xyxy(xywh):
+    """
+    Convert bounding box from xywh to xyxy format.
+    """
+    x, y, w, h = xywh
+    return np.array([x, y, x + w, y + h])
