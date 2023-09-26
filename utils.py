@@ -12,7 +12,7 @@ def parse_xml(file_path) -> dict:
             if anno.type == "polygon":
                 coords = tuple(map(tuple, anno.coordinates))
             elif anno.type == "point":
-                coords = tuple(anno.coordinates)
+                coords = anno.coordinates.squeeze()
             else:
                 raise NotImplementedError
             coords_per_label[label].append(coords)

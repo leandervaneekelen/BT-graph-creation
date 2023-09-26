@@ -10,6 +10,9 @@ import json
 
 from collections import defaultdict
 
+from tqdm import tqdm
+from pathlib import Path
+
 from scipy.spatial import distance, Delaunay
 from sklearn.neighbors import NearestNeighbors
 
@@ -134,7 +137,7 @@ class Graph:
         self,
         file_id: str,
         file_path: str,
-        spacing: tuple = (DEFAULT_SPACING, DEFAULT_SPACING),
+        spacing: tuple = None,
         roi: tuple = None,
         edge_config: EdgeConfig = None,
         csv_path: str = None,
@@ -142,7 +145,7 @@ class Graph:
         # print(f'Creating graph for id {file_id}.')
         self.file_path = file_path
         self.file_id = file_id
-        self.spacing = spacing
+        self.spacing = (DEFAULT_SPACING, DEFAULT_SPACING) if spacing else spacing
         self.roi = roi
         self.node_feature_csv = csv_path
         self.edge_feature_names = []  # will get added during self.add_edges()
@@ -592,6 +595,7 @@ class GxlFilesCreator:
         files_to_process: list,
         edge_config: EdgeConfig,
         spacings: dict = None,
+        rois: pd.DataFrame = None,
         normalize: bool = False,
         node_feature_csvs: str = None,
         datasplit_dict: dict = None,
@@ -599,12 +603,14 @@ class GxlFilesCreator:
         """
         files_to_process: list of paths to the files that should be processed
         spacings: dictionary that contains the spacing for each WSI (read from the spacing.json)
+        rois: optional dataframe containing (x1,y1,x2,y2) coordinates describing the ROI within to build graphs
         edge_config: EdgeConfig object
         node_feature_csvs: path to folder with csv files with additional node features (e.g. ImageNet features)
         """
         self.files_to_process = files_to_process
         self.edge_config = edge_config
         self.spacings = spacings
+        self.rois = rois
         self.normalize = normalize
         self.matched_csv = node_feature_csvs
         self.invalid_files = []
@@ -631,26 +637,28 @@ class GxlFilesCreator:
     def check_files(self):
         # remove files that don't have a matching spacing and csv entry from self.files_to_process, and vice versa
         # TODO: return list of missing files
-        file_ids_process = [
-            os.path.basename(f).split("_asap")[0] for f in self.files_to_process
-        ]
+        # TODO: clean up this filtering because it's a mess
+        file_ids_process = [Path(f).stem for f in self.files_to_process]
         if self.matched_csv is not None:
             common_ids = self._match_and_diff(
                 set(self.matched_csv.keys()), set(file_ids_process)
             )
             self.files_to_process = [
-                f
-                for f in self.files_to_process
-                if os.path.basename(f).split("_asap")[0] in set(common_ids)
+                f for f in self.files_to_process if Path(f).stem in common_ids
             ]
         if self.spacings is not None:
             common_ids = self._match_and_diff(
                 set(self.spacings.keys()), set(file_ids_process)
             )
             self.files_to_process = [
-                f
-                for f in self.files_to_process
-                if os.path.basename(f).split("_asap")[0] in set(common_ids)
+                f for f in self.files_to_process if Path(f).stem in common_ids
+            ]
+        if self.rois is not None:
+            common_ids = self._match_and_diff(
+                set(self.rois.keys()), set(file_ids_process)
+            )
+            self.files_to_process = [
+                f for f in self.files_to_process if Path(f).stem in common_ids
             ]
         if self.matched_csv is not None:
             self._matched_csv = {
@@ -664,6 +672,12 @@ class GxlFilesCreator:
                 for file_id, spacing in self.spacings.items()
                 if file_id in common_ids
             }
+        if self.rois is not None:
+            self.rois = {
+                file_id: roi
+                for file_id, roi in self.rois.items()
+                if file_id in common_ids
+            }
 
     def _match_and_diff(self, set1, set2) -> set:
         common_ids_csv_process = set1 & set2
@@ -674,27 +688,17 @@ class GxlFilesCreator:
         return self.get_graph(file_id, file_path).get_gxl()
 
     def get_graph(self, file_id, file_path):
-        # TODO: ask Lars how to make this neater
-        if self.spacings:
-            return Graph(
-                file_id=file_id,
-                file_path=file_path,
-                spacing=self.spacings[file_id],
-                edge_config=self.edge_config,
-                csv_path=self.matched_csv[file_id],
-            )
-        else:
-            if self.matched_csv:
-                return Graph(
-                    file_id=file_id,
-                    file_path=file_path,
-                    edge_config=self.edge_config,
-                    csv_path=self.matched_csv[file_id],
-                )
-            else:
-                return Graph(
-                    file_id=file_id, file_path=file_path, edge_config=self.edge_config
-                )
+        spacing = self.spacings[file_id] if self.spacings else None
+        roi = self.rois[file_id] if self.rois else None
+        csv_path = self.matched_csv[file_id] if self.matched_csv else None
+        return Graph(
+            file_id=file_id,
+            file_path=file_path,
+            spacing=spacing,
+            roi=roi,
+            edge_config=self.edge_config,
+            csv_path=csv_path,
+        )
 
     def save_gxls(self, output_path: str):
         # create output folder if it does not exist
@@ -717,11 +721,9 @@ class GxlFilesCreator:
                 for cls, file_ids in d.items()
                 for file_id in file_ids
             }
-        # process the graphs
+
         self.check_files()  # make sure we only have files that have a corresponding csv / spacing (if provided)
-        files_dict = {
-            os.path.basename(f)[:-9]: f for f in self.files_to_process
-        }  # get rid of '_asap' at the end
+        files_dict = {Path(f).stem: f for f in self.files_to_process}
         # remove files that are not in the datasplit dict
         if self.datasplit_dict is not None:
             files_dict = {
@@ -730,7 +732,7 @@ class GxlFilesCreator:
                 if f_id in file_id_to_folder.keys()
             }
 
-        for file_id, file_path in files_dict.items():
+        for file_id, file_path in tqdm(files_dict.items()):
             xml_tree = self.get_xml(file_id, file_path)
 
             if self.datasplit_dict is None:
@@ -770,6 +772,7 @@ def make_gxl_dataset(
     edge_def_l_to_tb: str = None,
     fully_connected: str = None,
     spacing_json: str = None,
+    roi_json: str = None,
     node_feature_csvs: str = None,
     split_json: str = None,
     other_edge_fct: str = None,
@@ -799,8 +802,9 @@ def make_gxl_dataset(
        The first column needs to have the node index number. The headers will be used as the feature name.
        If there is a column named "filename", it will be dropped.
      - `--spacing-json`: optional. Path to json file that contains the spacing for each whole slide image.
-     It is needed to compute the distance between elements. (default is 0.242797397769517, which corresponds to level 0
-       for the slide scanner used in this project)
+        It is needed to compute the distance between elements. (default is 0.242797397769517).
+     - `--roi-json`: optional. Path to JSON that contains (x1,y1,x2,y2) tuples per whole slide image.
+        Points outside of the ROI are not used for constructing the graph.
      - `overwrite`: optional. Set if you want existing gxl files to be overwritten. Default is False
 
     OUTPUT
@@ -827,6 +831,13 @@ def make_gxl_dataset(
         spacings = (
             None  # spacing of 0.242797397769517 will be used (default in Graph())
         )
+
+    # Read the ROI csv
+    if roi_json:
+        with open(roi_json) as file:
+            rois = json.load(file)
+    else:
+        rois = None
 
     # get a list of all the xml files to process
     if not os.path.isdir(asap_xml_files_folder):
@@ -859,13 +870,8 @@ def make_gxl_dataset(
     if overwrite:
         print("Existing files will be overwritten!")
     else:
-        existing_gxl = [
-            os.path.basename(i).rsplit(".", 1)[0]
-            for i in glob.glob(os.path.join(output_path, "*.gxl"))
-        ]
-        files_to_process_id = [
-            os.path.basename(i).rsplit("_", 1)[0] for i in files_to_process
-        ]
+        existing_gxl = [path.stem for path in Path(output_folder).glob("*.gxl")]
+        files_to_process_id = [Path(file).stem for file in files_to_process]
         files_to_process = [
             file_path
             for file_id, file_path in zip(files_to_process_id, files_to_process)
@@ -876,6 +882,7 @@ def make_gxl_dataset(
     GxlFilesCreator(
         files_to_process=files_to_process,
         spacings=spacings,
+        rois=rois,
         edge_config=edge_def_config,
         node_feature_csvs=node_feature_csvs,
         datasplit_dict=datasplit_dict,
